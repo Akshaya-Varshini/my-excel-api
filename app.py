@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-SIMPLE Flask API for Render Deployment - Beginner Version
+SIMPLE Flask API for Render Deployment - Fixed Version
 """
 
 import os
@@ -15,16 +15,10 @@ import time
 # Try to import your financial report generator
 try:
     from financial_report_generator import EnhancedFinancialReportGenerator
+    GENERATOR_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Could not import financial_report_generator: {e}")
-    # Simple demo version for testing
-    class EnhancedFinancialReportGenerator:
-        def generate_report(self, *args, **kwargs):
-            return {
-                "status": "success",
-                "message": "Files processed successfully (demo mode)",
-                "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
-            }
+    GENERATOR_AVAILABLE = False
 
 app = Flask(__name__)
 CORS(app)
@@ -55,6 +49,11 @@ def home():
         'status': 'healthy',
         'message': 'Excel Processing API is running on Render!',
         'time': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'generator_available': GENERATOR_AVAILABLE,
+        'api_keys_configured': {
+            'gemini': bool(GEMINI_KEY),
+            'pdfco': bool(PDFCO_KEY)
+        },
         'endpoints': {
             'home': '/',
             'process': '/process'
@@ -97,13 +96,52 @@ def process_files():
             file.save(filepath)
             uploaded_files[file_key] = filepath
 
-        # Process with your generator
-        generator = EnhancedFinancialReportGenerator()
-        result = generator.generate_report(
-            balance_sheet_path=uploaded_files['balance_sheet'],
-            cash_flow_path=uploaded_files['cash_flow'],
-            profit_loss_path=uploaded_files['profit_loss']
-        )
+        # Check if we can use the real generator
+        if not GENERATOR_AVAILABLE:
+            # Clean up files
+            for filepath in uploaded_files.values():
+                try:
+                    os.remove(filepath)
+                except:
+                    pass
+            
+            return jsonify({
+                'success': True,
+                'message': 'Files processed successfully (demo mode - generator not available)',
+                'result': {
+                    'status': 'success',
+                    'message': 'Files uploaded successfully but generator module not available',
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'files_received': list(uploaded_files.keys())
+                },
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+            })
+
+        # Check API keys
+        if not GEMINI_KEY or not PDFCO_KEY:
+            # Clean up files
+            for filepath in uploaded_files.values():
+                try:
+                    os.remove(filepath)
+                except:
+                    pass
+            
+            return jsonify({
+                'success': False,
+                'error': 'API keys not configured. Please set GEMINI_API_KEY and PDFCO_API_KEY environment variables.'
+            }), 500
+
+        # Process with your generator - FIXED METHOD NAME
+        logger.info("Initializing generator...")
+        generator = EnhancedFinancialReportGenerator(GEMINI_KEY, PDFCO_KEY)
+        
+        logger.info("Processing comprehensive financial report...")
+        # Use the correct method name from financial_report_generator.py
+        html_content, pdf_url, chart_urls = generator.process_comprehensive_financial_report({
+            'balance_sheet': uploaded_files['balance_sheet'],
+            'cash_flow': uploaded_files['cash_flow'],
+            'profit_loss': uploaded_files['profit_loss']
+        })
 
         # Clean up files
         for filepath in uploaded_files.values():
@@ -114,16 +152,33 @@ def process_files():
 
         return jsonify({
             'success': True,
-            'message': 'Files processed successfully!',
-            'result': result,
+            'message': 'Financial report generated successfully!',
+            'result': {
+                'status': 'success',
+                'message': 'Financial report generated successfully',
+                'html_content': html_content[:1000] + "..." if len(html_content) > 1000 else html_content,  # Truncate for response size
+                'pdf_url': pdf_url,
+                'chart_urls': chart_urls,
+                'charts_generated': len([url for url in chart_urls if url]),
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+            },
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
         })
 
     except Exception as e:
         logger.error(f"Error: {str(e)}")
+        
+        # Clean up files on error
+        if 'uploaded_files' in locals():
+            for filepath in uploaded_files.values():
+                try:
+                    os.remove(filepath)
+                except:
+                    pass
+        
         return jsonify({
             'success': False,
-            'error': 'Processing failed. Please try again.',
+            'error': f'Processing failed: {str(e)}',
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
         }), 500
 
